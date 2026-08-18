@@ -424,6 +424,33 @@
   window.__imgFB=function(el){ if(el.dataset.f){ el.style.display="none"; if(el.getAttribute("data-hs")) el.parentNode.style.display="none"; return; } el.dataset.f="1"; el.src=el.src.replace("/"+IMG_LANG+"/","/en/"); };
   function save(){ if(EDIT) store.write(col); }
 
+  /* ====== SALVAR ONLINE (Cloudflare) ======
+     Cole a URL do seu Worker entre as aspas abaixo depois de criá-lo.
+     Ex.: var API_URL = "https://caos-cofre.seu-usuario.workers.dev";
+     Deixe "" pra continuar no modo arquivo (sem nuvem). */
+  var API_URL = "https://caos-cofre.giberti-pa.workers.dev";
+  function apiOn(){ return typeof API_URL==="string" && /^https?:\/\//.test(API_URL); }
+  function cloudLoad(cb){
+    if(!apiOn()){ cb(null); return; }
+    fetch(API_URL,{cache:"no-store"}).then(function(r){ return r.ok?r.json():null; })
+      .then(function(j){ cb(j && typeof j==="object" && Object.keys(j).length ? j : null); })
+      .catch(function(){ cb(null); });
+  }
+  function cloudSave(cb){
+    if(!apiOn()){ cb(false,"noapi"); return; }
+    var senha=""; try{ senha=localStorage.getItem("cri_senha")||""; }catch(e){}
+    if(!senha){ senha=prompt("Sua senha pra salvar online:")||""; if(!senha){ cb(false,"cancel"); return; } }
+    var d=new Date(); col._updated=d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
+    save();
+    fetch(API_URL,{ method:"POST", headers:{ "content-type":"application/json","x-senha":senha }, body:JSON.stringify(col) })
+      .then(function(r){
+        if(r.status===401){ try{ localStorage.removeItem("cri_senha"); }catch(e){} cb(false,"senha"); return; }
+        if(!r.ok){ cb(false,"http"); return; }
+        try{ localStorage.setItem("cri_senha",senha); }catch(e){}
+        cb(true);
+      }).catch(function(){ cb(false,"net"); });
+  }
+
   function patch(id,p){ col[id]=Object.assign({}, col[id]||{}, p); save(); }
   function toggleN(id){ if(!EDIT) return; patch(id,{n:!rec(id).n}); renderStats(); renderLadder(); renderGrid(); }
   function toggleRH(id){ if(!EDIT) return; patch(id,{rh:!rec(id).rh}); renderStats(); renderLadder(); renderGrid(); }
@@ -767,11 +794,36 @@
     // banner do dono + copiar p/ publicar + sair
     var bar=document.createElement("div");
     bar.className="edit-bar";
-    bar.innerHTML='<span class="eb-dot"></span><b>Modo edição</b><span class="eb-txt">— mudanças ficam só neste navegador até você republicar</span>'
-      +'<div class="eb-actions"><button id="ebCopy">Copiar p/ publicar</button><button id="ebExit">Sair</button></div>';
+    var actions = apiOn()
+      ? '<div class="eb-actions"><button id="ebSave">☁ Salvar online</button><button id="ebReload">Recarregar</button><button id="ebExit">Sair</button></div>'
+      : '<div class="eb-actions"><button id="ebCopy">Copiar p/ publicar</button><button id="ebExit">Sair</button></div>';
+    var txt = apiOn()
+      ? '— edite e clique <b>Salvar online</b>; já vai pro ar pra todo mundo'
+      : '— mudanças ficam só neste navegador até você republicar';
+    bar.innerHTML='<span class="eb-dot"></span><b>Modo edição</b><span class="eb-txt">'+txt+'</span>'+actions;
     var wrap=document.querySelector(".wrap");
     wrap.insertBefore(bar, wrap.firstChild);
-    document.getElementById("ebCopy").addEventListener("click", function(){
+
+    var ebSave=document.getElementById("ebSave");
+    if(ebSave) ebSave.addEventListener("click", function(){
+      var b=ebSave, o=b.textContent; b.disabled=true; b.textContent="Salvando…";
+      cloudSave(function(ok,err){
+        b.disabled=false; b.textContent=o;
+        if(ok){ renderStats(); toast("Salvo! Já está no ar ☁"); }
+        else if(err==="senha"){ toast("Senha errada — tenta de novo"); }
+        else if(err==="cancel"){ /* silêncio */ }
+        else { toast("Não deu pra salvar. Confere a conexão."); }
+      });
+    });
+    var ebReload=document.getElementById("ebReload");
+    if(ebReload) ebReload.addEventListener("click", function(){
+      cloudLoad(function(cloud){
+        if(!cloud){ toast("Nada online ainda (ou sem conexão)"); return; }
+        col=cloud; try{ store.write(col); }catch(e){} renderAll(); toast("Puxado do online ✓");
+      });
+    });
+    var ebCopy=document.getElementById("ebCopy");
+    if(ebCopy) ebCopy.addEventListener("click", function(){
       var d=new Date(), iso=d.getFullYear()+"-"+String(d.getMonth()+1).padStart(2,"0")+"-"+String(d.getDate()).padStart(2,"0");
       col._updated=iso; save();
       copyText(JSON.stringify(col,null,2), "Copiado (data de hoje incluída) — cole entre as tags seedData e republique");
@@ -816,6 +868,13 @@
 
   renderAll();
   loadBRPrices();
+  // dados online (Cloudflare): fonte da verdade quando o cofre está configurado
+  cloudLoad(function(cloud){
+    if(!cloud) return;
+    var hasLocal=false; try{ hasLocal=!!localStorage.getItem(KEY); }catch(e){}
+    // visitante sempre vê o online; o dono só é sobrescrito se não tiver rascunho local neste navegador
+    if(!EDIT || !hasLocal){ col=cloud; if(EDIT){ try{ store.write(col); }catch(e){} } renderAll(); }
+  });
 })();
 </script>
 </body>
